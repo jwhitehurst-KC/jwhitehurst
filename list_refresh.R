@@ -12,18 +12,18 @@ AzureAuth::get_azure_token(
 
 # List of sharepoint lists
 list_names <- c(
-#  "BCCHP_Activities",
-#  "BCCHP_Agencies",
-#  "BCCHP_AgencyProcedure",
-#  "BCCHP_AgencyService",
-#  "BCCHP_Organizations",
-  "BCCHP_People"#,
-#  "BCCHP_PersonActivity",
-#  "BCCHP_Procedures",
-#  "BCCHP_Programs",
-#  "BCCHP_Screenings",
-#  "BCCHP_Services",
-#  "BCCHP_ZipsCounties"
+  "BCCHP_Activities",
+  "BCCHP_Agencies",
+  "BCCHP_AgencyProcedure",
+  "BCCHP_AgencyService",
+  "BCCHP_Organizations",
+  "BCCHP_People",
+  "BCCHP_PersonActivity",
+  "BCCHP_Procedures",
+  "BCCHP_Programs",
+  "BCCHP_Screenings",
+  "BCCHP_Services",
+  "BCCHP_ZipsCounties"
 )
 
 # set Sharepoint site

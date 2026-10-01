@@ -26,7 +26,7 @@ list_names <- c(
   "BCCHP_ZipsCounties"
 )
 
-# set Sharepoint site
+# set Sharepoint sites
 spsite <- get_sharepoint_site(site_url = "https://kc1.sharepoint.com/teams/DPH-BCCHP")
 
 for(list_name in list_names) {

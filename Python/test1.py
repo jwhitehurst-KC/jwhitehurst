@@ -12,6 +12,8 @@ CONN_STR = (
     "TrustServerCertificate=yes;"   # Skips strict chain validation for self-signed on-prem certs
 )
 
+CONN_STR ="Server=kcitazrhpasqlprp16.azds.kingcounty.gov;Database=inthealth_edw;Encrypt=yes;TrustServerCertificate=yes;Authentication=ActiveDirectoryInteractive"
+
 # 2. Establish connection
 conn = mssql_python.connect(CONN_STR)
 
@@ -19,6 +21,7 @@ conn = mssql_python.connect(CONN_STR)
 # so autocommit must be True, or the destination table must already exist and be committed.
 conn.autocommit = True
 cursor = conn.cursor()
+
 
 # 3. Stream the parquet file using a RecordBatchReader
 # Using 'iter_batches' ensures you don't even pull entire row groups into RAM.

@@ -19,7 +19,7 @@ ROW_BATCH_SIZE = 150000                     # Number of rows to pull into memory
 
 def stream_azure_to_parquet_v1(export_dir, db_name, schema_name, table_name):
     # 2. Build the Connection String
-    conn_str = f"Server={SERVER};Database={db_name};Encrypt=yes;TrustServerCertificate=yes;Authentication=ActiveDirectoryIntegrated"
+    conn_str = f"Server={SERVER};Database={db_name};Encrypt=yes;TrustServerCertificate=yes;Authentication=ActiveDirectoryInteractive"
     conn = connect(conn_str)
 
     # Note: bulkcopy_arrow handles its own transaction stream, 
@@ -27,9 +27,36 @@ def stream_azure_to_parquet_v1(export_dir, db_name, schema_name, table_name):
     conn.autocommit = True
     cursor = conn.cursor()
 
+    if db_name == "inthealth_edw":
+        batch_cnt = cursor.execute(
+            f"SELECT CAST(ROUND(SUM(nps.reserved_page_count) * 8.0 / 1024 / 1000 / 1.95, 0) AS INTEGER) AS N "
+            f"FROM sys.schemas s "
+            f"INNER JOIN sys.tables t ON s.schema_id = t.schema_id "
+            f"INNER JOIN sys.indexes i ON  t.object_id = i.object_id AND i.index_id <= 1 "
+            f"INNER JOIN sys.pdw_table_distribution_properties tp ON t.object_id = tp.object_id "
+            f"INNER JOIN sys.pdw_table_mappings tm ON t.object_id = tm.object_id "
+            f"INNER JOIN sys.pdw_nodes_tables nt ON tm.physical_name = nt.name "
+            f"INNER JOIN sys.dm_pdw_nodes pn ON  nt.pdw_node_id = pn.pdw_node_id "
+            f"INNER JOIN sys.pdw_distributions di ON  nt.distribution_id = di.distribution_id "
+            f"INNER JOIN sys.dm_pdw_nodes_db_partition_stats nps ON nt.object_id = nps.object_id "
+            f" AND nt.pdw_node_id = nps.pdw_node_id "
+            f" AND nt.distribution_id = nps.distribution_id "
+            f" AND i.index_id = nps.index_id"
+            f"WHERE pn.type = 'COMPUTE' AND s.name = '{schema_name}' AND t.name = '{table_name}'").fetchall()
+    else:
+        batch_cnt = cursor.execute(
+            f"SELECT CAST(ROUND(SUM(reserved_page_count) * 8.0 / 1024 / 1000 / 1.95, 0) AS INTEGER) AS N"
+            f"FROM sys.dm_db_partition_stats, sys.objects, sys.schemas "
+            f"WHERE sys.dm_db_partition_stats.object_id = sys.objects.object_id "
+	        f" AND sys.objects.schema_id = sys.schemas.schema_id "
+	        f" AND sys.schemas.name = '{schema_name}' "
+	        f" AND sys.objects.name = '{table_name}' "
+            f"GROUP BY sys.schemas.name, sys.objects.name").fetchall()
+
+    batch_cnt = batch_cnt[0][0]
     nrow = cursor.execute(f"select count_big(*) as N from {schema_name}.{table_name}").fetchall()
     nrow = nrow[0][0]
-    num_rows_per_file = math.ceil(nrow/10)
+    num_rows_per_file = math.ceil(nrow/batch_cnt)
 
     # Open the connection as an arrow stream
     cursor.execute(f"select * from {schema_name}.{table_name}")
@@ -37,10 +64,10 @@ def stream_azure_to_parquet_v1(export_dir, db_name, schema_name, table_name):
     os.makedirs(export_dir, exist_ok=True)
 
     iter = 0
-    start_dt = datetime.now()  # noqa: DTZ005
-    print(start_dt.strftime("%H:%M:%S") + ": Start SYNAPSE!")
+    start_dt = datetime.now()
+    print(start_dt.strftime("%H:%M:%S") + ": Start Export!")
     for batch in reader:
-        print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))  # noqa: DTZ005
+        print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))
         file_name = f"final.apcd_elig_month.{str(iter).zfill(3)}_20261001.parquet"
         out = os.path.join(export_dir, file_name)
         writer = pq.ParquetWriter(out, batch.schema)
@@ -48,11 +75,10 @@ def stream_azure_to_parquet_v1(export_dir, db_name, schema_name, table_name):
         writer.close()
         del writer
         gc.collect()
-        export_dir = "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v1_synapse/"
-        print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))  # noqa: DTZ005
+        print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))
         iter = iter + 1
 
-    end_dt = datetime.now()  # noqa: DTZ005
+    end_dt = datetime.now()
     duration = end_dt - start_dt
     duration = end_dt - start_dt
     total_minutes = int(duration.total_seconds() // 60)
@@ -121,8 +147,8 @@ def stream_azure_to_parquet_v2(export_dir, db_name, schema_name, table_name):
 
         # Initialize the file writer
         
-        start_dt = datetime.now()  # noqa: DTZ005
-        print(f"{datetime.now().strftime("%H:%M:%S")}: Writing initial chunk to: {current_file_path}")  # noqa: DTZ005
+        start_dt = datetime.now()
+        print(f"{datetime.now().strftime("%H:%M:%S")}: Writing initial chunk to: {current_file_path}")
         writer = pq.ParquetWriter(
             current_file_path, 
             schema, 
@@ -148,7 +174,7 @@ def stream_azure_to_parquet_v2(export_dir, db_name, schema_name, table_name):
                 writer.close() 
                 del writer
                 gc.collect()
-                print(f"{datetime.now().strftime("%H:%M:%S")}: File {current_file_path} reached target limit (~2GB). Closing file.")  # noqa: DTZ005
+                print(f"{datetime.now().strftime("%H:%M:%S")}: File {current_file_path} reached target limit (~2GB). Closing file.")
                 
                 # Move completed file, Rotate and initialize the next physical segment
                 file_counter += 1
@@ -160,13 +186,13 @@ def stream_azure_to_parquet_v2(export_dir, db_name, schema_name, table_name):
                     compression='snappy',
                     version="2.6", 
                     use_deprecated_int96_timestamps=False)
-                print(f"{datetime.now().strftime("%H:%M:%S")}: Created new file segment: {current_file_path}")  # noqa: DTZ005
+                print(f"{datetime.now().strftime("%H:%M:%S")}: Created new file segment: {current_file_path}")
                 
         writer.close()
         del writer
         gc.collect()
         
-        end_dt = datetime.now()  # noqa: DTZ005
+        end_dt = datetime.now()
         duration = end_dt - start_dt
         duration = end_dt - start_dt
         total_minutes = int(duration.total_seconds() // 60)
@@ -198,14 +224,3 @@ stream_azure_to_parquet_v1(
     db_name = "inthealth_edw", 
     schema_name = "stg_claims", 
     table_name = "stage_apcd_elig_month")
-
-
-
-writer = pq.ParquetWriter(
-    "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v2_hhsaw/final.apcd_elig_month.002_20261002.parquet", 
-    compression='snappy',
-    version="2.6", 
-    use_deprecated_int96_timestamps=False)
-writer.close()
-del writer
-gc.collect()

@@ -28,11 +28,11 @@ cursor.execute('select * from stg_claims.stage_apcd_elig_month')
 reader = cursor.arrow_reader(batch_size = num_rows_per_file)
 
 iter = 0
-start_dt = datetime.now()  # noqa: DTZ005
+start_dt = datetime.now()
 print(start_dt.strftime("%H:%M:%S") + ": Start SYNAPSE!")
 for batch in reader:
     start = time.perf_counter()
-    print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))  # noqa: DTZ005
+    print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))
     file_name = f"final.apcd_elig_month.{str(iter).zfill(3)}_20261001.parquet"
     out = os.path.join(OUTPUT_DIR, file_name)
     writer = pp.ParquetWriter(out, batch.schema)
@@ -43,10 +43,10 @@ for batch in reader:
     export_dir = "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v1_synapse/"
     shutil.move(out, os.path.join(export_dir, file_name))
     end = time.perf_counter()
-    print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S") + " | Elapsed time = " + str(round(end-start)/60))  # noqa: DTZ005
+    print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S") + " | Elapsed time = " + str(round(end-start)/60))  
     iter = iter + 1
 
-end_dt = datetime.now()  # noqa: DTZ005
+end_dt = datetime.now()  
 duration = end_dt - start_dt
 duration = end_dt - start_dt
 total_minutes = int(duration.total_seconds() // 60)
@@ -73,11 +73,11 @@ cursor.execute('select * from claims.final_apcd_elig_month')
 reader = cursor.arrow_reader(batch_size = num_rows_per_file)
 
 iter = 0
-start_dt = datetime.now()  # noqa: DTZ005
+start_dt = datetime.now()  
 print(start_dt.strftime("%H:%M:%S") + ": Start HHSAW!")
 for batch in reader:
     start = time.perf_counter()
-    print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))  # noqa: DTZ005
+    print('Starting iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S"))  
     file_name = f"final.apcd_elig_month.{str(iter).zfill(3)}_20261001.parquet"
     out = os.path.join(OUTPUT_DIR, file_name)
     writer = pp.ParquetWriter(out, batch.schema)
@@ -88,10 +88,10 @@ for batch in reader:
     export_dir = "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v1_hhsaw/"
     shutil.move(out, os.path.join(export_dir, file_name))
     end = time.perf_counter()
-    print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S") + " | Elapsed time = " + str(round(end-start)/60))  # noqa: DTZ005
+    print('End iteration ' + str(iter).zfill(3) + ' at ' + datetime.now().strftime("%H:%M:%S") + " | Elapsed time = " + str(round(end-start)/60))  
     iter = iter + 1
 
-end_dt = datetime.now()  # noqa: DTZ005
+end_dt = datetime.now()  
 duration = end_dt - start_dt
 duration = end_dt - start_dt
 total_minutes = int(duration.total_seconds() // 60)

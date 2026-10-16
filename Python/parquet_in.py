@@ -1,8 +1,9 @@
-from mssql_python import connect
+import time
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pp
-import time
+from mssql_python import connect
 
 SQL_CONNECTION_STRING="Server=kcitazrhpasqlprp16.azds.kingcounty.gov;Database=hhs_analytics_workspace;Encrypt=yes;TrustServerCertificate=yes;Authentication=ActiveDirectoryInteractive"
 

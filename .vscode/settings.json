@@ -6,12 +6,26 @@
         "azds",
         "bulkcopy",
         "CDIP",
+        "configr",
+        "csvgz",
         "dphcifs",
+        "dplyr",
         "elig",
         "executemany",
+        "hhsaw",
+        "httr",
         "inthealth",
         "kcitazrhpasqlprp",
         "kingcounty",
-        "nrow"
+        "lubridate",
+        "Mcaid",
+        "Mcare",
+        "nrow",
+        "NVARCHAR",
+        "rownum",
+        "tidyverse",
+        "TINYINT",
+        "upcasted",
+        "VARCHAR"
     ]
 }

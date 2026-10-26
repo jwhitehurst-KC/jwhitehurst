@@ -1,153 +1,167 @@
 import gc
 import os
-import shutil
-import urllib
 from datetime import datetime
 
-import pyarrow as pa
+import pandas as pd
+import psutil
 import pyarrow.parquet as pq
-from sqlalchemy import create_engine, text
+from mssql_python import connect
+from tqdm import tqdm
 
-# 1. Configuration (Works for both Azure SQL and Azure Synapse Dedicated SQL Pools)
+# ============================================================
+# Configuration
+# ============================================================
 SERVER = 'kcitazrhpasqlprp16.azds.kingcounty.gov'
-DRIVER = '{ODBC Driver 17 for SQL Server}' # Ensure this driver is installed on your OS
+DRIVER = '{ODBC Driver 17 for SQL Server}'
 
-OUTPUT_DIR = "C:/temp/apcd/"
+TARGET_FILE_GB = 2
+TARGET_FILE_BYTES = int(TARGET_FILE_GB * 1024 * 1024 * 1024)
+BATCH_DATE = "20261001"
 
-# Configuration Boundaries
-TARGET_FILE_SIZE = 1.9 * 1024 * 1024 * 1024  # Safely target ~1.9 GB in bytes
-#TARGET_FILE_SIZE = 10 * 1024 * 1024  # Safely target ~1.9 GB in bytes
-ROW_BATCH_SIZE = 150000                     # Number of rows to pull into memory at once
+# Parquet compression options: "snappy", "zstd", "gzip", "brotli", "lz4"
+PARQUET_COMPRESSION = "zstd"          # Recommended for SQL workloads
+USE_DICTIONARY_ENCODING = True        # Better compression for string/categorical data
 
-def stream_azure_to_parquet(export_dir, db_name, schema_name, table_name):
-    # 2. Build the Connection String
-    params = urllib.parse.quote_plus(
-        f"DRIVER={DRIVER};SERVER={SERVER};DATABASE={db_name};"
-        f"Encrypt=yes;TrustServerCertificate=yes;"
-        f"Authentication=ActiveDirectoryIntegrated;"
-        f"autocommit=True;")
 
-    connection_uri = f"mssql+pyodbc:///?odbc_connect={params}"
+# ============================================================
+# Adaptive batch sizing based on available memory
+# ============================================================
+def calculate_batch_size():
+    """
+    Estimate Arrow batch size (rows per batch) based on available memory.
+    Uses ~10% of available RAM and assumes ~800 bytes per row.
+    """
+    mem = psutil.virtual_memory()
+    avail = mem.available
 
-    # Use 'fast_executemany' for general pyodbc performance optimizations
-    engine = create_engine(connection_uri, fast_executemany=True)#.execution_options(isolation_level="AUTOCOMMIT")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    file_counter = 1
-    current_file_name = f"final.apcd_elig_month.{str(file_counter).zfill(3)}_20261002.parquet"
-    current_file_path = os.path.join(OUTPUT_DIR, current_file_name)
-    
-    # Establish server-side cursor streaming
-    query = f"select * from {schema_name}.{table_name}"
-    with engine.connect() as conn:
-        # 'stream_results=True' tells SQLAlchemy/pyodbc to fetch row blocks on-demand
-        result_proxy = conn.execution_options(stream_results=True).execute(text(query))
+    EST_ROW_SIZE = 800  # bytes/row median size estimate
+    safe_bytes = int(avail * 0.10)
+
+    est_rows = safe_bytes // EST_ROW_SIZE
+
+    # Constrain within safe limits
+    return max(50_000, min(est_rows, 2_000_000))
+
+
+# ============================================================
+# Start
+# ============================================================
+start_dt = datetime.now()
+print(start_dt.strftime("%H:%M:%S") + ": Start Export!")
+
+
+# ============================================================
+# Input table list
+# ============================================================
+data = {
+    "db_name": ["hhs_analytics_workspace", "inthealth_edw"],
+    "schema_name": ["claims", "stg_claims"],
+    "table_name": ["final_apcd_elig_month", "stage_apcd_elig_month"],
+    "export_dir": [
+        "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v2_hhsaw/",
+        "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v2_synapse/"
+    ]
+}
+df = pd.DataFrame(data)
+
+
+# ============================================================
+# Main export loop
+# ============================================================
+for _, row in df.iterrows():
+
+    # Build connection string
+    conn_str = f"""
+        Server={SERVER};
+        Database={row['db_name']};
+        Encrypt=yes;
+        TrustServerCertificate=yes;
+        Authentication=ActiveDirectoryIntegrated
+    """
+
+    conn = connect(conn_str)
+    conn.autocommit = True
+    cursor = conn.cursor()
+
+    # Count rows for progress bar
+    nrow = cursor.execute(
+        f"SELECT COUNT_BIG(*) FROM {row['schema_name']}.{row['table_name']}"
+    ).fetchone()[0]
+
+    print(f"\nExporting {row['schema_name']}.{row['table_name']} ({nrow:,} rows)")
+
+    # Adaptive batch size
+    ARROW_BATCH_ROWS = calculate_batch_size()
+    print(f"Adaptive batch size: {ARROW_BATCH_ROWS:,} rows per batch")
+
+    # Run SELECT
+    cursor.execute(f"SELECT * FROM {row['schema_name']}.{row['table_name']}")
+    reader = cursor.arrow_reader(batch_size=ARROW_BATCH_ROWS)
+
+    # Ensure directory exists
+    os.makedirs(row['export_dir'], exist_ok=True)
+
+    # Track file writing state
+    file_index = 1
+    current_writer = None
+    current_file_path = None
+    bytes_written = 0
+
+    # Progress bar
+    pbar = tqdm(total=nrow, unit="rows", desc=row["table_name"])
+
+    def start_new_file(file_index):
+        file_name = f"{row['table_name']}.{str(file_index).zfill(3)}_{BATCH_DATE}.parquet"
+        file_path = os.path.join(row['export_dir'], file_name)
+        print(f"\nStarting new file: {file_name}")
+        return file_path, 0  # reset bytes_written
+
+    # Start first file
+    current_file_path, bytes_written = start_new_file(file_index)
+    file_index += 1
+
+    # Stream batches
+    for batch in reader:
+
+        # Writer lazy init on first batch
+        if current_writer is None:
+            current_writer = pq.ParquetWriter(
+                current_file_path,
+                batch.schema,
+                compression=PARQUET_COMPRESSION,
+                use_dictionary=USE_DICTIONARY_ENCODING
+            )
+
+        current_writer.write_batch(batch)
+        pbar.update(batch.num_rows)
         
-        # Pull the first batch to dynamically map the database schema to Arrow
-        first_chunk = result_proxy.fetchmany(ROW_BATCH_SIZE)
-        if not first_chunk:
-            print("No data retrieved from the query.")
-            return
-            
-        # 1. Convert SQLAlchemy Row objects into standard python dictionaries
-        # using the '.mappings()' layer or a list comprehension
-        chunk_dicts = [dict(row._mapping) for row in first_chunk]
-        
-        # 2. Correct PyArrow method to create a table from a list of dicts
-        inferred_table = pa.Table.from_pylist(chunk_dicts)
-        inferred_schema = inferred_table.schema
-        
-        # 3. Create a clean, upgraded schema by catching and swapping types
-        upcasted_fields = []
-        for field in inferred_schema:
-            # A. Catch TINYINT / SMALLINT and map to INT32
-            if pa.types.is_int8(field.type) or pa.types.is_int16(field.type):
-                upcasted_fields.append(pa.field(field.name, pa.int32(), nullable=field.nullable))
-            # B. Catch Timestamps and force Millisecond precision WITHOUT Timezones
-            elif pa.types.is_timestamp(field.type):
-                # Synapse requires timestamp('ms') and will throw errors if tz is present
-                upcasted_fields.append(pa.field(field.name, pa.timestamp('ms', tz=None), nullable=field.nullable))
-            # C. Catch Dates (no time element) and keep standard date32
-            elif pa.types.is_date(field.type):
-                upcasted_fields.append(pa.field(field.name, pa.date32(), nullable=field.nullable))        
-            else:
-                # Keep all other types (string, bigint, decimals) intact
-                upcasted_fields.append(field)
+        # Check actual file size on disk
+        actual_size = os.path.getsize(current_file_path)
 
-        # Build the final, safe target schema
-        schema = pa.schema(upcasted_fields)
-        table = pa.Table.from_pylist(chunk_dicts, schema=schema)
+        if actual_size >= TARGET_FILE_BYTES:
+            print(f"Rolling file at {actual_size/1024/1024/1024:.2f} GB")
+            current_writer.close()
+            current_writer = None
+            gc.collect()
 
-        # Initialize the file writer
-        
-        start_dt = datetime.now()  # noqa: DTZ005
-        print(f"{datetime.now().strftime("%H:%M:%S")}: Writing initial chunk to: {current_file_path}")  # noqa: DTZ005
-        writer = pq.ParquetWriter(
-            current_file_path, 
-            schema, 
-            compression='snappy',
-            version="2.6", 
-            use_deprecated_int96_timestamps=False)
-        writer.write_table(table)
-        
-        while True:
-            chunk = result_proxy.fetchmany(ROW_BATCH_SIZE)
-            if not chunk:
-                break # Database streaming completely finished
-                
-            # Convert this chunk's SQLAlchemy rows to a list of dicts
-            chunk_dicts = [dict(row._mapping) for row in chunk]
-            
-            # Enforce the established schema when building the next Arrow Table chunk
-            table = pa.Table.from_pylist(chunk_dicts, schema=schema)
-            writer.write_table(table)
-            
-            # Check the actual compressed size of the file on disk
-            if os.path.getsize(current_file_path) >= TARGET_FILE_SIZE:
-                writer.close() 
-                del writer
-                gc.collect()
-                print(f"{datetime.now().strftime("%H:%M:%S")}: File {current_file_path} reached target limit (~2GB). Closing file.")  # noqa: DTZ005
-                
-                # Move completed file, Rotate and initialize the next physical segment
-                file_counter += 1
-                shutil.move(current_file_path, os.path.join(export_dir, current_file_name))
-                current_file_name = f"final.apcd_elig_month.{str(file_counter).zfill(3)}_20261002.parquet"
-                current_file_path = os.path.join(export_dir, current_file_name)
-                writer = pq.ParquetWriter(
-                    current_file_path, 
-                    schema, 
-                    compression='snappy',
-                    version="2.6", 
-                    use_deprecated_int96_timestamps=False)
-                print(f"{datetime.now().strftime("%H:%M:%S")}: Created new file segment: {current_file_path}")  # noqa: DTZ005
-                
-        writer.close()
-        del writer
-        gc.collect()
-        shutil.move(current_file_path, os.path.join(export_dir, current_file_name))
-        
-        end_dt = datetime.now()  # noqa: DTZ005
-        duration = end_dt - start_dt
-        duration = end_dt - start_dt
-        total_minutes = int(duration.total_seconds() // 60)
-        hours, minutes = divmod(total_minutes, 60)
+            current_file_path, bytes_written = start_new_file(file_index)
+            file_index += 1
 
-        print(end_dt.strftime("%H:%M:%S") + ": Successfully exported Azure data into sized Parquet chunks!")
-        print(f"Total Duration: {hours} hour(s) and {minutes} minute(s).")
+    # Close last file
+    if current_writer:
+        current_writer.close()
+
+    pbar.close()
+    print(f"Finished exporting {row['schema_name']}.{row['table_name']}")
 
 
+# ============================================================
+# Finish
+# ============================================================
+end_dt = datetime.now()
+duration = end_dt - start_dt
+total_minutes = int(duration.total_seconds() // 60)
+hours, minutes = divmod(total_minutes, 60)
 
-stream_azure_to_parquet(
-    export_dir = "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v2_hhsaw/", 
-    db_name = "hhs_analytics_workspace", 
-    schema_name = "claims", 
-    table_name = "final_apcd_elig_month")
-stream_azure_to_parquet(
-    export_dir = "//dphcifs/APDE-CDIP/Mcaid-Mcare/testing/v2_synapse/", 
-    db_name = "inthealth_edw", 
-    schema_name = "stg_claims", 
-    table_name = "stage_apcd_elig_month")
-
-
-
+print("\n" + end_dt.strftime("%H:%M:%S") + ": Done!")
+print(f"Total Duration: {hours} hour(s) and {minutes} minute(s).")

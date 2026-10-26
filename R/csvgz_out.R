@@ -24,7 +24,7 @@ final_dir <- paste0(temp_dir, "final_schema/")
 
 source_tables <- data.frame(
   schema_in = c("stg_claims", "claims"), 
-  table_in = c("stage_apcd_elig_month", "final_apcd_elig_month_test"),
+  table_in = c("stage_apcd_elig_month", "final_apcd_elig_month"),
   schema_out = c("stage", "final"), 
   table_out = c("apcd_elig_month", "apcd_elig_month"),
   export_dir = paste0(export_base, c("_synapse/", "_hhsaw/"))
@@ -76,7 +76,7 @@ for(i in 1:nrow(source_tables)) {
     db_name <- "inthealth_edw"
     conn <- create_db_connection(server, interactive = F, prod = T)
     batches <- DBI::dbGetQuery(conn, glue::glue_sql(
-      "SELECT CAST(ROUND(SUM(nps.reserved_page_count) * 8.0 / 1024 / 1000 / 1.95, 0) AS INTEGER)
+      "SELECT CAST(ROUND(SUM(nps.reserved_page_count) * 8.0 / 1024 / 1000 / 2, 0) AS INTEGER)
 FROM sys.schemas s
 INNER JOIN sys.tables t ON s.schema_id = t.schema_id
 INNER JOIN sys.indexes i ON  t.object_id = i.object_id AND i.index_id <= 1
@@ -93,7 +93,7 @@ GROUP BY s.name, t.name", .con = conn))[1,1]
     db_name <- "hhs_analytics_workspace"
     conn <- create_db_connection(server, interactive = F, prod = T)
     batches <- DBI::dbGetQuery(conn, glue::glue_sql(
-      "SELECT CAST(ROUND(SUM(reserved_page_count) * 8.0 / 1024 / 1000 / 1.95, 0) AS INTEGER)
+      "SELECT CAST(ROUND(SUM(reserved_page_count) * 8.0 / 1024 / 1000 / 2, 0) AS INTEGER)
 FROM sys.dm_db_partition_stats, sys.objects, sys.schemas
 WHERE sys.dm_db_partition_stats.object_id = sys.objects.object_id
 	AND sys.objects.schema_id = sys.schemas.schema_id
@@ -177,7 +177,7 @@ for(i in 1:nrow(source_tables)) {
     message(glue::glue("...{i} - {x}: Writing {filename} - {Sys.time()}"))
     a = system2(command = "bcp", args = c(bcp_args), stdout = TRUE, stderr = TRUE)
     message(glue::glue("...{i} - {x}: Compressing file - {Sys.time()}"))
-    zip::gzip(filepath)
+    R.utils::gzip(filepath)
     message(glue::glue("...{i} - {x}: Moving file {filename} - {Sys.time()}"))
     file.rename(from = paste0(filepath, ".gz"), 
                 to = paste0(source_tables[i, "export_dir"], filename, ".gz"))
@@ -191,11 +191,12 @@ for(i in 1:nrow(source_tables)) {
   }
   end_dt <- Sys.time()
 
-# Compute time difference
-elapsed <- difftime(end_dt, start_dt, units = "secs")
-# Convert to hours and minutes
-hours   <- floor(as.numeric(elapsed) / 3600)
-minutes <- floor((as.numeric(elapsed) %% 3600) / 60)
-paste0("Total Duration: ", hours, " hour(s) and ", minutes, " minute(s)")
+  # Compute time difference
+  elapsed <- difftime(end_dt, start_dt, units = "secs")
+  # Convert to hours and minutes
+  hours   <- floor(as.numeric(elapsed) / 3600)
+  minutes <- floor((as.numeric(elapsed) %% 3600) / 60)
+  source_tables[i, "duration"] <- paste0("Total Duration: ", hours, " hour(s) and ", minutes, " minute(s)")
+  message(source_tables[i, "duration"])
 }
 

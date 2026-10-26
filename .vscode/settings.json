@@ -29,11 +29,13 @@
         "NVARCHAR",
         "parallelly",
         "pbar",
+        "pydatetime",
         "rownum",
         "rtype",
         "tidyverse",
         "TINYINT",
         "upcasted",
+        "VARBINARY",
         "VARCHAR"
     ]
 }

@@ -13,7 +13,6 @@
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -88,7 +87,7 @@ def convert_types_for_sql(df: pd.DataFrame, sql_colinfo: dict):
             continue
 
         series = df[col]
-        sql_type, maxlen = sql_colinfo[col]
+        maxlen = sql_colinfo[col]
         dtype = str(series.dtype).lower()
 
         if "bool" in dtype:
@@ -245,7 +244,7 @@ def process_file(file_path, schema, table):
         t1 = time.time()
 
         batch_duration = t1 - t0
-        last_duration = batch_duration
+        last_duration = batch_duration  # noqa: F841
         total_rows_inserted += len(df)
 
         new_batch_size = optimize_batch_size(batch_size, batch_duration)
